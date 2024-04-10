@@ -81,14 +81,16 @@ class PotholeDetection:
         self.root.resizable(False, False)
         
         # turn off maximize button
-        self.root.attributes("-toolwindow", 1)
+        # self.root.attributes("-toolwindow", 1)
         
         # Set corner icon to png
-        self.icon = Image.open("C:\\Users\\Lumi\\Documents\\PotholeClient\\pothole.png")
+        # self.icon = Image.open("C:\\Users\\Lumi\\Documents\\PotholeClient\\pothole.png")
+        self.icon = Image.open("/home/lumi/Git/PotholeClient/pothole.png")
         self.icon = ImageTk.PhotoImage(self.icon)
         self.root.iconphoto(True, self.icon)
         
-        self.reload_icon = Image.open("C:\\Users\\Lumi\\Documents\\PotholeClient\\icons8-refresh-ios-17-filled\\icons8-refresh-100.png")
+        #self.reload_icon = Image.open("C:\\Users\\Lumi\\Documents\\PotholeClient\\icons8-refresh-ios-17-filled\\icons8-refresh-100.png")
+        self.reload_icon = Image.open("/home/lumi/Git/PotholeClient/icons8-refresh-ios-17-filled/icons8-refresh-100.png")
         self.reload_icon = ctk.CTkImage(self.reload_icon)
         
         fontObj = ctk.CTkFont("Helvetica", 24)
@@ -147,8 +149,8 @@ class PotholeDetection:
         model_label = ctk.CTkLabel(self.root, text="Model:", font=fontObj)
         model_label.grid(row=1, column=0, sticky=tk.W, padx=15, pady=15)
 
-        self.model_path = "C:\\Users\\Lumi\\Documents\\PotholeClient\\"
-        self.models = [opt.split("\\")[-1][:-3] for opt in glob("C:\\Users\\Lumi\\Documents\\PotholeClient\\*.pt")] # Replace with your actual models
+        self.model_path = "/home/lumi/Git/PotholeClient/"
+        self.models = [opt.split("\\")[-1][:-3] for opt in glob("*.pt")] # Replace with your actual models
         self.model_var = ctk.StringVar()
         model_dropdown = ctk.CTkComboBox(self.root, variable=self.model_var, values=self.models, state="readonly", font=smallerFont, width=200)
         model_dropdown.set(self.models[0])
@@ -233,6 +235,9 @@ class PotholeDetection:
         self.br_circle = DraggableCircle(self.stream_canvas, 750, 580, 10, 'black', self)
 
 
+
+
+
         # Map Tab
         self.map_widget = tkintermapview.TkinterMapView(self.map_tab, width=700, height=700)
         self.map_widget.grid(row=0, column=0)
@@ -258,6 +263,27 @@ class PotholeDetection:
         
         self.save_button = ctk.CTkButton(self.map_interaction_frame, text="Generate Report", command=self.generate_report_thread)
         self.save_button.grid(row=2, column=0, padx=5, pady=5)
+
+        self.map_widget.canvas.bind("<B1-Motion>", self.mouse_move)
+        self.map_widget.canvas.bind("<ButtonRelease-1>", self.mouse_release)
+
+        self.alt_pressed = False
+
+        self.interested_ids = []
+
+        # Bind pressing the Alt key to turning on alt_pressed
+        self.stream.bind("<Alt_L>", self.alt_down)
+
+        # Bind releasing the Alt key to turning off alt_pressed
+        self.stream.bind("<KeyRelease-Alt_L>", self.alt_up)
+        
+        self.tl_rect_x = None
+        self.tl_rect_y = None
+
+        self.br_rect_x = None
+        self.br_rect_y = None
+
+        self.map_bbox = None
         
         thread = Thread(target=self.get_potholes_from_server)
         thread.start()
@@ -265,6 +291,126 @@ class PotholeDetection:
         self.stream.protocol("WM_DELETE_WINDOW", self.on_close)
         
         self.detection_cycle()
+
+    def alt_down(self, event):
+        self.alt_pressed = True
+
+    def alt_up(self, event):
+        self.alt_pressed = False
+
+    def mouse_release(self, event):
+        self.map_widget.fading_possible = True
+        self.map_widget.last_move_time = time.time()
+
+        if self.tl_rect_x is not None:
+            # Conver tl_rect and br_rect to lat/long
+            tl_coords = self.map_widget.convert_canvas_coords_to_decimal_coords(self.tl_rect_x, self.tl_rect_y)
+            br_coords = self.map_widget.convert_canvas_coords_to_decimal_coords(self.br_rect_x, self.br_rect_y)
+
+
+            # Go through the pothole markers and see if they are in the bounding box
+            # If they are, change their color to 
+            
+            self.interested_ids = []
+
+            for pothole_id, marker in self.pothole_markers.items():
+                lat, long = marker.position
+
+                # If point in the bounding box, change color. note that tl_coords might not actually be the top left corner
+                if ((br_coords[0] <= lat <= tl_coords[0]) or (tl_coords[0] <= lat <= br_coords[0])) \
+                and ((br_coords[1] <= long <= tl_coords[1]) or (tl_coords[1] <= long <= br_coords[1])):
+                    marker.map_widget.canvas.itemconfigure(marker.big_circle, fill="#3377FF", outline = "#40B3FF")
+                    marker.map_widget.canvas.itemconfigure(marker.polygon, fill="#40B3FF", outline = "#40B3FF")
+                    self.pothole_buttons[pothole_id].configure(fg_color=ctk.ThemeManager.theme["CTkButton"]["fg_color"])
+                    self.interested_ids.append(pothole_id)
+                else:
+                    marker.map_widget.canvas.itemconfigure(marker.big_circle, fill="#9B261E", outline = "#C5542D")
+                    marker.map_widget.canvas.itemconfigure(marker.polygon, fill="#C5542D", outline = "#C5542D")
+                    self.pothole_buttons[pothole_id].configure(fg_color=ctk.ThemeManager.theme["CTkFrame"]["fg_color"])
+
+            if self.map_bbox is not None:
+                self.map_bbox.delete()
+
+            # Create polygon from the two points
+            self.map_bbox = self.map_widget.set_polygon([tl_coords, (tl_coords[0], br_coords[1]), br_coords, (br_coords[0], tl_coords[1])], fill_color=None, outline_color="red")
+
+        self.tl_rect_x = None
+        self.tl_rect_y = None
+
+        self.br_rect_x = None
+        self.br_rect_y = None
+
+        self.map_widget.canvas.delete("rect")
+
+        # check if mouse moved after mouse click event
+        if self.map_widget.mouse_click_position == (event.x, event.y):
+            # mouse didn't move
+            if self.map_widget.map_click_callback is not None:
+                # get decimal coords of current mouse position
+                coordinate_mouse_pos = self.map_widget.convert_canvas_coords_to_decimal_coords(event.x, event.y)
+                self.map_widget.map_click_callback(coordinate_mouse_pos)
+        else:
+            # mouse was moved, start fading animation
+            self.map_widget.after(1, self.map_widget.fading_move)
+
+    def mouse_move(self, event):
+        if not self.alt_pressed:
+            if self.map_bbox is not None:
+                self.map_bbox.delete()
+                self.map_bbox = None
+
+                self.interested_ids = []
+                for pothole_id, marker in self.pothole_markers.items():
+                    marker.map_widget.canvas.itemconfigure(marker.big_circle, fill="#9B261E", outline = "#C5542D")
+                    marker.map_widget.canvas.itemconfigure(marker.polygon, fill="#C5542D", outline = "#C5542D")
+                    self.pothole_buttons[pothole_id].configure(fg_color=ctk.ThemeManager.theme["CTkFrame"]["fg_color"])
+
+                    self.interested_ids.append(pothole_id)
+
+            # calculate moving difference from last mouse position
+            mouse_move_x = self.map_widget.last_mouse_down_position[0] - event.x
+            mouse_move_y = self.map_widget.last_mouse_down_position[1] - event.y
+
+            # set move velocity for movement fading out
+            delta_t = time.time() - self.map_widget.last_mouse_down_time
+            if delta_t == 0:
+                self.move_velocity = (0, 0)
+            else:
+                self.move_velocity = (mouse_move_x / delta_t, mouse_move_y / delta_t)
+
+            # save current mouse position for next move event
+            self.map_widget.last_mouse_down_position = (event.x, event.y)
+            self.map_widget.last_mouse_down_time = time.time()
+
+            # calculate exact tile size of widget
+            tile_x_range = self.map_widget.lower_right_tile_pos[0] - self.map_widget.upper_left_tile_pos[0]
+            tile_y_range = self.map_widget.lower_right_tile_pos[1] - self.map_widget.upper_left_tile_pos[1]
+
+            # calculate the movement in tile coordinates
+            tile_move_x = (mouse_move_x / self.map_widget.width) * tile_x_range
+            tile_move_y = (mouse_move_y / self.map_widget.height) * tile_y_range
+
+            # calculate new corner tile positions
+            self.map_widget.lower_right_tile_pos = (self.map_widget.lower_right_tile_pos[0] + tile_move_x, self.map_widget.lower_right_tile_pos[1] + tile_move_y)
+            self.map_widget.upper_left_tile_pos = (self.map_widget.upper_left_tile_pos[0] + tile_move_x, self.map_widget.upper_left_tile_pos[1] + tile_move_y)
+
+            self.map_widget.check_map_border_crossing()
+            self.map_widget.draw_move()
+
+        else:
+            # Otherwise, we need to draw the rectangle moving from where we first clicked to where we are now
+
+            # check if we need to set the first point
+            if self.tl_rect_x is None:
+                self.tl_rect_x = event.x
+                self.tl_rect_y = event.y
+
+            self.br_rect_x = event.x
+            self.br_rect_y = event.y
+
+            # draw the rectangle
+            self.map_widget.canvas.delete("rect")
+            self.map_widget.canvas.create_rectangle(self.tl_rect_x, self.tl_rect_y, self.br_rect_x, self.br_rect_y, outline="red", tag="rect")
         
     def generate_report_thread(self):
         thread = Thread(target=self.generate_report)
@@ -280,7 +426,9 @@ class PotholeDetection:
         geolocator = Nominatim(user_agent="Nancy Amandi", timeout= 10)
         rgeocode = RateLimiter(geolocator.reverse, min_delay_seconds=0.1)
         
-        for pothole_id, x in self.pothole_dict.items():
+        for pothole_id in self.interested_ids:
+            x = self.pothole_dict[pothole_id]
+            
             lat, long = x
             
             location = rgeocode((lat, long))
@@ -305,20 +453,7 @@ class PotholeDetection:
         self.save_button.configure(state="normal")
         
     def draw_region(self):
-        """
-        This function will allow the user to draw a region on the map to select potholes.
-        """
-        self.map_widget.add_left_click_map_command(self.draw_region_callback)
-        
-    def draw_region_callback(self, coords):
-        """
-        This function will be called when the user clicks on the map to draw a region.
-        """
-        if "region" in self.__dict__:
-            self.map_widget.delete_shape(self.region)
-            
-        self.region = self.map_widget.draw_polygon(coords, fill="blue", alpha=0.5)
-        
+        pass
             
     def add_pothole_thread(self, coords):
         thread = Thread(target=self.add_pothole, args=(coords[0], coords[1]))
@@ -377,6 +512,8 @@ class PotholeDetection:
             pothole_label.grid(row=0, column=1, padx=5, pady=5)
             
             self.pothole_buttons[pothole["id"]] = pothole_frame
+
+            self.interested_ids.append(pothole["id"])
             
     def delete_pothole_thread(self, id):
         thread = Thread(target=self.delete_pothole, args=(id,))
